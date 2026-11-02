@@ -66,43 +66,35 @@ In Colab, place the project folder in Google Drive or upload it to the runtime, 
 
 For an initial debugging run, use only a few epochs. Once your pipeline passes the sanity checks, run the full baseline and keep the same split, seed, and evaluation protocol for your ablations.
 
-## 6. What was accomplished
+## 6. Baseline
 
-### ABMIL baseline implementation
+### Running it
 
-All `TODO` cells in `ECE1512_ProjectA_Student.ipynb` are complete:
+- Single run: set `DATASET` in Step 0 and run Steps 0-8.
+- All datasets (C16, C17, BRACS) × seeds (42, 0, 1): run Steps 0-5, then Step 8b.
 
-- **Data:** train/validation/test `DataLoader`s (only the training loader is shuffled).
-- **Model:** gated-attention ABMIL (Ilse et al., 2018). Patch features are reduced to 256 dimensions (linear + ReLU), scored by a gated attention branch, softmax-normalised over the patches of each slide, pooled with `torch.bmm`, and classified by a linear layer.
-- **Training:** cross-entropy loss, AdamW (`lr=1e-4`, `weight_decay=1e-5`), 30 epochs, and the standard `zero_grad -> forward -> loss -> backward -> step` loop.
-- **Model selection:** the epoch with the best validation macro-AUROC + macro-F1 is kept. The test set is evaluated once, with that checkpoint.
+The split is fixed by `seed: 42` in each YAML, so the run seed only changes weight init and shuffling. Step 8b skips runs that already have a JSON in `results/`, so with the provided results it only rebuilds the tables and figures. Set `RERUN = True` to retrain.
 
-`utils.py`, `dataloader.py` and `wsi_visualization.py` are the instructor-provided files and are unchanged.
+The C16 WSI overlays need `test_067.tif`, `test_068.tif` and `test_068.xml` from [Hugging Face](https://huggingface.co/datasets/LeonYe/ECE1512-WSI-Feature) in `slide/`.
 
-### Multi-dataset, multi-seed runs (notebook Step 8b)
+### Results
 
-Step 8b reruns the same pipeline on **CAMELYON16, CAMELYON17 and BRACS**, each with seeds **42, 0 and 1**, without editing the config by hand. The train/validation/test split of each dataset comes from `seed: 42` in its YAML file and is identical across runs; the run seed only changes weight initialisation and the order of training slides. Runs with saved results are skipped, so the loop can be resumed after an interruption, and the summary and figure cells can be rerun without retraining.
-
-Outputs:
+Everything is already in `results/`:
 
 ```text
 results/
-  {DATASET}_seed{SEED}.json                    # per-epoch history, best epoch, test metrics
-  {DATASET}_seed{SEED}_test_predictions.csv    # per-slide test probabilities and predictions
-  test_metrics_all_runs.csv                    # one row per run
-  test_metrics_mean_std.csv                    # mean and std over seeds
-  ckpt/{DATASET}_seed{SEED}.pt                 # best checkpoint (selected on validation)
+  {DATASET}_seed{SEED}.json                  # history, best epoch, test metrics
+  {DATASET}_seed{SEED}_test_predictions.csv  # per-slide test predictions
+  test_metrics_all_runs.csv
+  test_metrics_mean_std.csv
+  ckpt/{DATASET}_seed{SEED}.pt
   figures/
-    loss_{DATASET}.png                         # train/val loss for all three seeds
-    loss_{DATASET}_seed{SEED}.png              # train/val loss for one run
-    attention_test_068_seed{SEED}.png          # C16 attention on the WSI, tumour slide
-    attention_test_067_seed{SEED}.png          # C16 attention on the WSI, normal slide
-    attention_map_{DATASET}.png                # attention on patch coordinates, all seeds
+    loss_{DATASET}.png, loss_{DATASET}_seed{SEED}.png
+    attention_test_067_seed{SEED}.png, attention_test_068_seed{SEED}.png  # C16, on the WSI
+    attention_map_{DATASET}.png                                           # on patch coordinates
 ```
 
-### Baseline test results
-
-Mean ± standard deviation over 3 seeds (sample std). AUROC and F1 are macro-averaged over classes; accuracy is in %.
+Test metrics, mean ± std over 3 seeds (macro AUROC and F1):
 
 | Dataset | Classes | Test slides | AUROC | Accuracy (%) | Macro-F1 |
 |---|---|---|---|---|---|
@@ -110,18 +102,31 @@ Mean ± standard deviation over 3 seeds (sample std). AUROC and F1 are macro-ave
 | CAMELYON17 | 4 | 200 | 0.848 ± 0.035 | 78.0 ± 3.9 | 0.515 ± 0.050 |
 | BRACS | 7 | 86 | 0.799 ± 0.012 | 46.9 ± 1.8 | 0.374 ± 0.012 |
 
-Per-seed values are in `results/test_metrics_all_runs.csv`. On CAMELYON16 and BRACS the best validation epoch was early (epochs 3-10 of 30); on CAMELYON17 it was later (epochs 9-22).
+For C17 and BRACS there are no WSIs, so attention is plotted at the patch coordinates for one correct and one misclassified test slide.
 
-### Attention visualisation
+## 7. Extension: stochastic bag subsampling (Step 9)
 
-- **CAMELYON16:** the provided `visualize_wsi_attention` overlays attention on `test_068` (tumour, with annotation contours) and `test_067` (normal) for each seed. The notebook saves each figure by wrapping `plt.show`, so the provided function is used as-is.
-- **CAMELYON17 and BRACS:** no WSIs are included, so attention is drawn at each patch's level-0 coordinates instead. Each figure shows one confidently correct and one confidently misclassified test slide (chosen from the seed-42 predictions) across all three seeds. Colours are within-slide attention percentiles, not tumour probabilities.
+Each epoch, every training slide keeps a random `ceil(rho * N)` of its `N` patches. Validation and test use full bags. Everything else matches the baseline, and `rho = 1` is the baseline.
 
-### Reproducing without retraining
+### Running it
 
-With the feature files in `feature/` and the provided `results/` folder:
+Run Steps 0-5, the Step 8b helpers cell (not the training loop), then the Step 9 cells in order. Step 9:
 
-1. Run notebook Steps 0-5 to define the model, `train_one_epoch` and `evaluate`.
-2. Run the Step 8b cells. The loop finds the saved JSON files and skips training; the summary and attention cells load the saved checkpoints.
+1. Checks that `rho = 1` reproduces the first 3 epochs of `results/C16_seed42.json`.
+2. Trains `rho` in {0.25, 0.5, 0.75} on each dataset with seeds 42, 0 and 1 (27 runs).
+3. Picks `rho` per dataset by mean validation AUC + F1 (ties go to the lower validation loss), then compares it with the baseline on test. The other `rho` values are shown as a sensitivity analysis.
 
-The C16 WSI overlays also need `test_067.tif`, `test_068.tif` and `test_068.xml` from the [Hugging Face dataset](https://huggingface.co/datasets/LeonYe/ECE1512-WSI-Feature) in `slide/`.
+Settings are in the Step 9 config cell (`RHOS`, `EXT_SEEDS`, `EXT_NUM_EPOCHS`, `EXT_RERUN`, `EXT_DIR`). `TRACK_FULL_TRAIN_LOSS` adds a full-bag pass over the training set each epoch, so the training loss can be compared with the baseline. Finished runs are skipped.
+
+### Results
+
+```text
+results/ext_subsample/
+  {DATASET}_rho{RHO}_seed{SEED}.json, ..._test_predictions.csv
+  ckpt/, figures/, sanity/
+  rho_selection_validation.csv, chosen_rho.json  # rho chosen on validation
+  main_comparison.csv                            # baseline vs chosen rho on test
+  sensitivity_all_runs.csv, sensitivity_rho.png  # every rho on test
+  overfitting_summary.csv, loss_curves_baseline_vs_rho.png
+  per_class_f1_recall.csv, per_class_f1_vs_rho.png
+```
